@@ -5,5 +5,5 @@ app = FastAPI()
 async def root():
     return {"message": "Hello World"}
 
-#@app.route("/")
+#@app.route("/fetch-product-info")
 
