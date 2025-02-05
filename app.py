@@ -6,6 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from dotenv import load_dotenv
 from db_control.connect import AzureDBConnection # connect.pyのインポート
 import logging
+import uvicorn
 
 # エラーハンドリング用ログの設定
 logging.basicConfig(
@@ -50,26 +51,18 @@ def get_db():
 async def root():
     return {"message": "Hello World"}
 
-
+# コードをキーにDBにあるm_product_horieからnameとpriceを引っ張ってくるエンドポイント
 @app.get("/products/{code}")
 async def get_product_by_code(code:str, db = Depends(get_db)):
-    logging.info(f"Request received for product code: {code}")
     try:
         query = text("SELECT name, price FROM m_product_horie WHERE code = :code")
-        logging.info(f"Executing query: {query}")
-        logging.info(f"Query parameters: {{'code': code}}")
         result = db.execute(query, {"code":code}).fetchone()
-        logging.info(f"Query result: {result}")
         if not result:
-            logging.warning(f"Product not found: {code}")
             raise HTTPException(status_code=404, detail="Product not found")
-        logging.info(f"Product found: {result}")
         return {"name": result[0], "price": result[1]}
     except HTTPException as e:
-        logging.error(f"HTTP Exception: {e.detail}")
         raise e
     except Exception as e:
-        logging.error(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 # アプリケーション終了時のイベント
@@ -84,12 +77,10 @@ async def check_db_status():
         db_connection.connect()  # 接続確認用
         return {"status": "Database connection is healthy."}
     except Exception as e:
-        logging.error(f"Database connection error: {str(e)}")
         raise HTTPException(status_code=500, detail="Database connection failed.")
 
 
 
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
