@@ -1,11 +1,21 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, text, Column, String, Integer
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy import text, Column, String, Integer
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from dotenv import load_dotenv
-import os
-from typing import List
+from db_control.connect import AzureDBConnection # connect.pyのインポート
+import logging
+import uvicorn
+
+# エラーハンドリング用ログの設定
+logging.basicConfig(
+    level=logging.INFO,  # INFO以上のログを表示
+    format="%(asctime)s - %(levelname)s - %(message)s",  # ログのフォーマット
+    handlers=[
+        logging.StreamHandler()  # 標準出力に出力
+    ]
+)
 
 # 環境変数をロード
 load_dotenv()
@@ -14,21 +24,18 @@ load_dotenv()
 app = FastAPI()
 
 # CORS設定
-origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# データベース設定
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL is not set in environment variable")
+# connect.py を使用してデータベース接続を確立
+db_connection = AzureDBConnection()
+engine = db_connection.connect()  # DBエンジンの取得
 
-engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -40,22 +47,40 @@ def get_db():
     finally:
         db.close()
 
-class Product(Base):
-    __tablename__ = "m_product_horie"
-    id = Column(Integer, primary_key=True)
-    code = Column(String(13), unique=True, index = True, nullable=False)
-    name = Column(String(50), nullable=False)
-    price = Column(Integer, nullable=False)
-
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
 
+# コードをキーにDBにあるm_product_horieからnameとpriceを引っ張ってくるエンドポイント
 @app.get("/products/{code}")
-async def get_product_by_code(code:str, db:SessionLocal = Depends(get_db)):
-    query = text("SELECT name, price FROM m_product_horie WHERE code = :code")
-    result = db.execute(query, {"code":code}).fetchone()
-    if not result:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return {"name": result[0], "price": result[1]}
+async def get_product_by_code(code:str, db = Depends(get_db)):
+    try:
+        query = text("SELECT name, price FROM m_product_horie WHERE code = :code")
+        result = db.execute(query, {"code":code}).fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return {"name": result[0], "price": result[1]}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
+# アプリケーション終了時のイベント
+@app.on_event("shutdown")
+def shutdown_event():
+    db_connection.close()
+
+# DBに接続しているかを確認するだけのエンドポイント
+@app.get("/db/status")
+async def check_db_status():
+    try:
+        db_connection.connect()  # 接続確認用
+        return {"status": "Database connection is healthy."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Database connection failed.")
+
+
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
