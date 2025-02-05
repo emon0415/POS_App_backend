@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from db_control.connect import AzureDBConnection # connect.pyのインポート
 import logging
 import uvicorn
+import os
 
 # エラーハンドリング用ログの設定
 logging.basicConfig(
@@ -51,20 +52,6 @@ def get_db():
 async def root():
     return {"message": "Hello World"}
 
-# コードをキーにDBにあるm_product_horieからnameとpriceを引っ張ってくるエンドポイント
-@app.get("/products/{code}")
-async def get_product_by_code(code:str, db = Depends(get_db)):
-    try:
-        query = text("SELECT name, price FROM m_product_horie WHERE code = :code")
-        result = db.execute(query, {"code":code}).fetchone()
-        if not result:
-            raise HTTPException(status_code=404, detail="Product not found")
-        return {"name": result[0], "price": result[1]}
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-
 # アプリケーション終了時のイベント
 @app.on_event("shutdown")
 def shutdown_event():
@@ -80,7 +67,24 @@ async def check_db_status():
         raise HTTPException(status_code=500, detail="Database connection failed.")
 
 
+# コードをキーにDBにあるm_product_horieからnameとpriceを引っ張ってくるエンドポイント
+@app.get("/products/{code}")
+async def get_product_by_code(code:str, db = Depends(get_db)):
+    try:
+        query = text("SELECT name, price FROM m_product_horie WHERE code = :code")
+        result = db.execute(query, {"code":code}).fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return {"name": result[0], "price": result[1]}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))  # 環境変数からPORTを取得（デフォルト8000）
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
+
