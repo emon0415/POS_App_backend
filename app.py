@@ -9,6 +9,8 @@ import logging
 import uvicorn
 import os
 from pydantic import BaseModel
+from schemas import Product, ProductCreate, Transaction, TransactionCreate, TransactionDetail, TransactionDetailCreate, TransactionWithDetails
+
 
 # エラーハンドリング用ログの設定
 logging.basicConfig(
@@ -69,14 +71,14 @@ async def check_db_status():
 
 
 # コードをキーにDBにあるm_product_horieからnameとpriceを引っ張ってくるエンドポイント
-@app.get("/products/{code}")
+@app.get("/products/{code}", response_model=Product)
 async def get_product_by_code(code:str, db = Depends(get_db)):
     try:
         query = text("SELECT name, price FROM m_product_horie WHERE code = :code")
         result = db.execute(query, {"code":code}).fetchone()
         if not result:
             raise HTTPException(status_code=404, detail="Product not found")
-        return {"name": result[0], "price": result[1]}
+        return Product(PRD_ID=result[0], CODE=result[1], NAME=result[2], PRICE=result[3])
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -89,7 +91,7 @@ class TransactionDetailData(BaseModel):
     PRD_NAME: str # 商品名
     PRD_PRICE: int # 商品単価
 
-@app.post("/add_transaction-detail")
+@app.post("/add_transaction-detail", response_model=TransactionDetail)
 async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)):
     try:
         # 商品コードから商品マスタテーブルにアクセスし、PRD_IDを取得
@@ -97,28 +99,39 @@ async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)
         product_result = db.execute(product_query, {"code": data.PRD_CODE}).fetchone()
 
         if not product_result:
-            raise HTTPException(status_code=404, detail=f"Product with code {data.PRD_CODE} not found.")
+            raise HTTPException(
+                status_code=404, detail=f"Product with code {data.PRD_CODE} not found."
+            )
         
         prd_id = product_result[0] # 商品IDを取得
 
-         # 確認用ログを追加
-        logging.info(f"TRD_ID: {data.TRD_ID}, PRD_ID: {prd_id}, PRD_CODE: {data.PRD_CODE}, PRD_NAME: {data.PRD_NAME}, PRD_PRICE: {data.PRD_PRICE}")
+        with db.begin():
+            # 取引明細にデータを挿入
+            detail_query = text("""
+                INSERT INTO transaction_detail_horie (TRD_ID, PRD_ID, PRD_CODE, PRD_NAME, PRD_PRICE)
+                VALUES (:TRD_ID, :PRD_ID, :PRD_CODE, :PRD_NAME, :PRD_PRICE)
+            """)
+            db.execute(detail_query, {
+                "TRD_ID": data.TRD_ID,
+                "PRD_ID": prd_id,
+                "PRD_CODE": data.PRD_CODE,
+                "PRD_NAME": data.PRD_NAME,
+                "PRD_PRICE": data.PRD_PRICE,
+            })
 
+            # 挿入された明細キーを取得
+            last_id_query = text("SELECT LAST_INSERT_ID() AS last_id")
+            last_id = db.execute(last_id_query).fetchone()["last_id"]
 
-        # 取引明細にデータを挿入
-        detail_query = text("""
-            INSERT INTO transaction_detail_horie (TRD_ID, PRD_ID, PRD_CODE, PRD_NAME, PRD_PRICE)
-            VALUES (:TRD_ID, :PRD_ID, :PRD_CODE, :PRD_NAME, :PRD_PRICE)
-        """)
-        db.execute(detail_query, {
-            "TRD_ID": data.TRD_ID,
-            "PRD_ID": prd_id,
-            "PRD_CODE": data.PRD_CODE,
-            "PRD_NAME": data.PRD_NAME,
-            "PRD_PRICE": data.PRD_PRICE,
-        })
-        db.commit()
-        return {"message": "Transaction detail added successfully."}
+        # 成功レスポンスデータを作成
+        return TransactionDetail(
+            DTL_ID=last_id,
+            TRD_ID=data.TRD_ID,
+            PRD_ID=prd_id,
+            PRD_CODE=data.PRD_CODE,
+            PRD_NAME=data.PRD_NAME,
+            PRD_PRICE=data.PRD_PRICE,
+        )
     except HTTPException as e:
         logging.error(f"HTTPException: {e.detail}")# 明確にHTTPExceptionが発生した場合の処理
         raise e
