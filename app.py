@@ -8,6 +8,7 @@ from db_control.connect import AzureDBConnection # connect.pyのインポート
 import logging
 import uvicorn
 import os
+from pydantic import BaseModel
 
 # エラーハンドリング用ログの設定
 logging.basicConfig(
@@ -81,7 +82,50 @@ async def get_product_by_code(code:str, db = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
+# データ検証用モデル
+class TransactionDetailData(BaseModel):
+    TRD_ID: int # トランザクションID
+    PRD_CODE: str # 商品コード
+    PRD_NAME: str # 商品名
+    PRD_PRICE: int # 商品単価
 
+@app.post("/add_transaction-detail")
+async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)):
+    try:
+        # 商品コードから商品マスタテーブルにアクセスし、PRD_IDを取得
+        product_query = text("SELECT pre_id FROM m_product_horie WHERE code = :code")
+        product_result = db.execute(product_query, {"code": data.PRD_CODE}).fetchone()
+
+        if not product_result:
+            raise HTTPException(status_code=404, detail=f"Product with code {data.PRD_CODE} not found.")
+        
+        prd_id = product_result[0] # 商品IDを取得
+
+         # 確認用ログを追加
+        logging.info(f"TRD_ID: {data.TRD_ID}, PRD_ID: {prd_id}, PRD_CODE: {data.PRD_CODE}, PRD_NAME: {data.PRD_NAME}, PRD_PRICE: {data.PRD_PRICE}")
+
+
+        # 取引明細にデータを挿入
+        detail_query = text("""
+            INSERT INTO transaction_detail_horie (TRD_ID, PRD_ID, PRD_CODE, PRD_NAME, PRD_PRICE)
+            VALUES (:TRD_ID, :PRD_ID, :PRD_CODE, :PRD_NAME, :PRD_PRICE)
+        """)
+        db.execute(detail_query, {
+            "TRD_ID": data.TRD_ID,
+            "PRD_ID": prd_id,
+            "PRD_CODE": data.PRD_CODE,
+            "PRD_NAME": data.PRD_NAME,
+            "PRD_PRICE": data.PRD_PRICE,
+        })
+        db.commit()
+        return {"message": "Transaction detail added successfully."}
+    except HTTPException as e:
+        logging.error(f"HTTPException: {e.detail}")# 明確にHTTPExceptionが発生した場合の処理
+        raise e
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Unexpected error occurred: {str(e)}", exc_info=True)  # 詳細なログ
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 
 if __name__ == "__main__":
