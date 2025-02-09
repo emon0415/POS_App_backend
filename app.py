@@ -9,8 +9,8 @@ import logging
 import uvicorn
 import os
 from pydantic import BaseModel
-from schemas import Product, ProductCreate, Transaction, TransactionCreate, TransactionDetail, TransactionDetailCreate, TransactionWithDetails
-
+from db_control.schemas import Product, ProductCreate, Transaction, TransactionCreate, TransactionDetail, TransactionDetailCreate, TransactionWithDetails
+from datetime import datetime
 
 # エラーハンドリング用ログの設定
 logging.basicConfig(
@@ -84,6 +84,63 @@ async def get_product_by_code(code:str, db = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
+# 新規取引登録用のリクエストモデル
+class AddTransactionRequest(BaseModel):
+    emp_cd: str
+    store_cd: str
+    pos_no: str
+    total_amt: int
+
+# 取引テーブルへの登録
+@app.post("/add_transaction", response_model=Transaction)
+async def add_transaction(data: AddTransactionRequest, db=Depends(get_db)):
+    logging.info(f"Received request to add transaction: {data}")
+    emp_cd= data.emp_cd
+    store_cd= data.store_cd 
+    pos_no= data.pos_no
+    total_amt= data.total_amt
+
+    try:
+        # 現在の日時を取得
+        transaction_datetime = datetime.now()
+
+        with db.begin():
+            # 新規取引を挿入
+            transaction_query = text("""
+                INSERT INTO transaction_horie (DATETIME, EMP_CD, STORE_CD, POS_NO, TOTAL_AMT)
+                VALUES (:DATETIME, :EMP_CD, :STORE_CD, :POS_NO, :TOTAL_AMT)
+            """)
+            db.execute(transaction_query, {
+                "DATETIME": transaction_datetime,
+                "EMP_CD": emp_cd,
+                "STORE_CD": store_cd,
+                "POS_NO": pos_no,
+                "TOTAL_AMT": total_amt,
+            })
+
+            # 挿入された取引キーを取得
+            last_id_query = text("SELECT LAST_INSERT_ID() AS TRD_ID")
+            last_id = db.execute(last_id_query).fetchone()["TRD_ID"]
+
+        # 成功レスポンスデータを作成
+        return Transaction(
+            TRD_ID=last_id,
+            DATETIME=transaction_datetime,
+            EMP_CD=emp_cd,
+            STORE_CD=store_cd,
+            POS_NO=pos_no,
+            TOTAL_AMT=total_amt,
+        )
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Unexpected error occurred: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
+
+
+
 # データ検証用モデル
 class TransactionDetailData(BaseModel):
     TRD_ID: int # トランザクションID
@@ -95,7 +152,7 @@ class TransactionDetailData(BaseModel):
 async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)):
     try:
         # 商品コードから商品マスタテーブルにアクセスし、PRD_IDを取得
-        product_query = text("SELECT pre_id FROM m_product_horie WHERE code = :code")
+        product_query = text("SELECT PRD_ID FROM m_product_horie WHERE code = :code")
         product_result = db.execute(product_query, {"code": data.PRD_CODE}).fetchone()
 
         if not product_result:
@@ -106,22 +163,31 @@ async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)
         prd_id = product_result[0] # 商品IDを取得
 
         with db.begin():
-            # 取引明細にデータを挿入
-            detail_query = text("""
-                INSERT INTO transaction_detail_horie (TRD_ID, PRD_ID, PRD_CODE, PRD_NAME, PRD_PRICE)
-                VALUES (:TRD_ID, :PRD_ID, :PRD_CODE, :PRD_NAME, :PRD_PRICE)
-            """)
-            db.execute(detail_query, {
-                "TRD_ID": data.TRD_ID,
-                "PRD_ID": prd_id,
-                "PRD_CODE": data.PRD_CODE,
-                "PRD_NAME": data.PRD_NAME,
-                "PRD_PRICE": data.PRD_PRICE,
-            })
+            try:
+                # 取引明細にデータを挿入
+                detail_query = text("""
+                    INSERT INTO transaction_detail_horie (TRD_ID, PRD_ID, PRD_CODE, PRD_NAME, PRD_PRICE)
+                    VALUES (:TRD_ID, :PRD_ID, :PRD_CODE, :PRD_NAME, :PRD_PRICE)
+                """)
+                db.execute(detail_query, {
+                    "TRD_ID": data.TRD_ID,
+                    "PRD_ID": prd_id,
+                    "PRD_CODE": data.PRD_CODE,
+                    "PRD_NAME": data.PRD_NAME,
+                    "PRD_PRICE": data.PRD_PRICE,
+                })
 
-            # 挿入された明細キーを取得
-            last_id_query = text("SELECT LAST_INSERT_ID() AS last_id")
-            last_id = db.execute(last_id_query).fetchone()["last_id"]
+                # 挿入された明細キーを取得
+                last_id_query = text("SELECT LAST_INSERT_ID() AS last_id")
+                last_id = db.execute(last_id_query).fetchone()["last_id"]
+            
+            except Exception as inner_e:
+                db.rollback()  # トランザクションをロールバック
+                logging.error(f"Error during transaction:  {str(inner_e)}", exc_info=True)  # 詳細なログ
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"An unexpected error occurred: {str(inner_e)}"
+                )  # 500 Internal Server Error を返す
 
         # 成功レスポンスデータを作成
         return TransactionDetail(
