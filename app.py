@@ -9,8 +9,9 @@ import logging
 import uvicorn
 import os
 from pydantic import BaseModel
-from db_control.schemas import Product, ProductCreate, Transaction, TransactionCreate, TransactionDetail, TransactionDetailCreate, TransactionWithDetails
+from db_control.schemas import Product, ProductCreate, Transaction, TransactionCreate, TransactionDetail, TransactionDetailCreate, TransactionWithDetails, AddTransactionRequest
 from datetime import datetime
+from db_control import mymodels, schemas, crud, connect
 
 # エラーハンドリング用ログの設定
 logging.basicConfig(
@@ -70,35 +71,19 @@ async def check_db_status():
         raise HTTPException(status_code=500, detail="Database connection failed.")
 
 
-# コードをキーにDBにあるm_product_horieからnameとpriceを引っ張ってくるエンドポイント
-@app.get("/products/{code}", response_model=Product)
+# 商品コード(code)で商品マスタ(m_product_horie)を検索し、該当商品を返す。見つからなければ404エラー
+@app.get("/products/{code}", response_model=schemas.Product)
 async def get_product_by_code(code:str, db = Depends(get_db)):
-    try:
-        query = text("SELECT name, price FROM m_product_horie WHERE code = :code")
-        result = db.execute(query, {"code":code}).fetchone()
-        if not result:
-            raise HTTPException(status_code=404, detail="Product not found")
-        return Product(PRD_ID=result[0], CODE=result[1], NAME=result[2], PRICE=result[3])
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
-# 新規取引登録用のリクエストモデル
-class AddTransactionRequest(BaseModel):
-    emp_cd: str
-    store_cd: str
-    pos_no: str
-    total_amt: int
+    product = db.query(mymodels.Product).filter(mymodels.Product.CODE == code).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product
+
 
 # 取引テーブルへの登録
-@app.post("/add_transaction", response_model=Transaction)
-async def add_transaction(data: AddTransactionRequest, db=Depends(get_db)):
-    logging.info(f"Received request to add transaction: {data}")
-    emp_cd= data.emp_cd
-    store_cd= data.store_cd 
-    pos_no= data.pos_no
-    total_amt= data.total_amt
+@app.post("/add_transaction", response_model=schemas.Transaction)
+async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db)):
 
     try:
         # 現在の日時を取得
@@ -112,10 +97,10 @@ async def add_transaction(data: AddTransactionRequest, db=Depends(get_db)):
             """)
             db.execute(transaction_query, {
                 "DATETIME": transaction_datetime,
-                "EMP_CD": emp_cd,
-                "STORE_CD": store_cd,
-                "POS_NO": pos_no,
-                "TOTAL_AMT": total_amt,
+                "EMP_CD": data.EMP_CD,
+                "STORE_CD": data.STORE_CD,
+                "POS_NO": data.POS_NO,
+                "TOTAL_AMT": data.TOTAL_AMT,
             })
 
             # 挿入された取引キーを取得
@@ -126,17 +111,16 @@ async def add_transaction(data: AddTransactionRequest, db=Depends(get_db)):
         return Transaction(
             TRD_ID=last_id,
             DATETIME=transaction_datetime,
-            EMP_CD=emp_cd,
-            STORE_CD=store_cd,
-            POS_NO=pos_no,
-            TOTAL_AMT=total_amt,
+            EMP_CD=data.EMP_CD,
+            STORE_CD=data.STORE_CD,
+            POS_NO=data.POS_NO,
+            TOTAL_AMT=data.TOTAL_AMT,
         )
     except Exception as e:
-        db.rollback()
-        logging.error(f"Unexpected error occurred: {str(e)}", exc_info=True)
+        logging.error(f"Transaction insert error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500, 
-            detail=f"An unexpected error occurred: {str(e)}"
+            detail=f"Internal Server Error: {str(e)}"
         )
 
 

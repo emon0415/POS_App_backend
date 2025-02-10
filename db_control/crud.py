@@ -1,7 +1,7 @@
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import insert
-from mymodels import TransactionDetail
-from connect import AzureDBConnection
+from db_control.mymodels import TransactionDetail
+from db_control.connect import AzureDBConnection
 
 # transaction_detail_horieテーブルに商品名と単価を挿入する関数
 def add_transaction_detail(data):

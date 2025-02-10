@@ -23,6 +23,12 @@ class TransactionBase(BaseModel):
     POS_NO: str
     TOTAL_AMT: int
 
+# リクエスト専用クラス
+class AddTransactionRequest(BaseModel):
+    EMP_CD: str
+    STORE_CD: str
+    POS_NO: str
+    TOTAL_AMT: int
 class TransactionCreate(TransactionBase):
     pass
 
