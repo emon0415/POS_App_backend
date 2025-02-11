@@ -12,6 +12,9 @@ from pydantic import BaseModel
 from db_control.schemas import Product, ProductCreate, Transaction, TransactionCreate, TransactionDetail, TransactionDetailCreate, TransactionWithDetails, AddTransactionRequest
 from datetime import datetime
 from db_control import mymodels, schemas, crud, connect
+import json
+from zoneinfo import zoneinfo
+
 
 # エラーハンドリング用ログの設定
 logging.basicConfig(
@@ -86,8 +89,8 @@ async def get_product_by_code(code:str, db = Depends(get_db)):
 async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db)):
 
     try:
-        # 現在の日時を取得
-        transaction_datetime = datetime.now()
+        # 現在の日時を取得（バックエンド側で処理）
+        transaction_datetime = datetime.now(ZoneInfo("Asia/Tokyo"))
 
         with db.begin():
             # 新規取引を挿入

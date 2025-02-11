@@ -17,7 +17,6 @@ class Product(ProductCreate):
 
 ## ============== 取引テーブル ==============
 class TransactionBase(BaseModel):
-    DATETIME: datetime
     EMP_CD: str
     STORE_CD: str
     POS_NO: str
