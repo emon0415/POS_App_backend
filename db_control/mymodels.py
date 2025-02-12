@@ -20,7 +20,7 @@ class Product(Base):
 class Transaction(Base):
     __tablename__ = "transaction_horie"
     TRD_ID = Column(Integer, primary_key=True, autoincrement=True, comment="Primary Key")
-    TRANSACTION_DATETIME = Column(TIMESTAMP, server_default=func.current_timestamp(), comment="TRANSACTION_DATETIME")
+    DATETIME = Column(TIMESTAMP, server_default=func.current_timestamp(), comment="TRANSACTION_DATETIME")
     EMP_CD = Column(String(10), nullable=False, comment="レジ担当")
     STORE_CD = Column(String(5), nullable=False, comment="store code")
     POS_NO = Column(String(3), nullable=False, comment="POS機ID")
