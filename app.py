@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text, Column, String, Integer
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.exc import IntegrityError, OperationalError, DataError
 from dotenv import load_dotenv
 from db_control.connect import AzureDBConnection # connect.pyのインポート
 import logging
@@ -13,7 +14,7 @@ from db_control.schemas import Product, ProductCreate, Transaction, TransactionC
 from datetime import datetime
 from db_control import mymodels, schemas, crud, connect
 import json
-from zoneinfo import zoneinfo
+import pytz
 
 
 # エラーハンドリング用ログの設定
@@ -31,10 +32,15 @@ load_dotenv()
 # FastAPIアプリケーションの初期化
 app = FastAPI()
 
+origins = [
+    "https://tech0-gen8-step4-pos-app-43.azurewebsites.net",  # フロントエンドのURL
+    "http://localhost:3000",  # 開発用
+]
+
 # CORS設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -85,12 +91,12 @@ async def get_product_by_code(code:str, db = Depends(get_db)):
 
 
 # 取引テーブルへの登録
-@app.post("/add_transaction", response_model=schemas.Transaction)
+@app.post("/add_transaction", response_model=schemas.AddTransactionRequest)
 async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db)):
 
     try:
         # 現在の日時を取得（バックエンド側で処理）
-        transaction_datetime = datetime.now(ZoneInfo("Asia/Tokyo"))
+        transaction_datetime = datetime.now(pytz.timezone("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
 
         with db.begin():
             # 新規取引を挿入
@@ -106,25 +112,44 @@ async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db
                 "TOTAL_AMT": data.TOTAL_AMT,
             })
 
-            # 挿入された取引キーを取得
-            last_id_query = text("SELECT LAST_INSERT_ID() AS TRD_ID")
-            last_id = db.execute(last_id_query).fetchone()["TRD_ID"]
-
         # 成功レスポンスデータを作成
-        return Transaction(
-            TRD_ID=last_id,
-            DATETIME=transaction_datetime,
-            EMP_CD=data.EMP_CD,
-            STORE_CD=data.STORE_CD,
-            POS_NO=data.POS_NO,
-            TOTAL_AMT=data.TOTAL_AMT,
-        )
+        return {
+            "message": "Transaction added successfully",
+            "DATETIME":transaction_datetime,
+            "EMP_CD":data.EMP_CD,
+            "STORE_CD":data.STORE_CD,
+            "POS_NO":data.POS_NO,
+            "TOTAL_AMT":data.TOTAL_AMT,
+        }
+    except IntegrityError as e:
+        db.rollback()
+        logging.error(f"IntegrityError (外部キー・ユニーク制約違反): {str(e)}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"データ整合性エラー: {str(e)}")
+
+    except OperationalError as e:
+        db.rollback()
+        logging.error(f"OperationalError (データベース接続エラー): {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="データベース接続エラーが発生しました。管理者に連絡してください。")
+
+    except DataError as e:
+        db.rollback()
+        logging.error(f"DataError (データ型エラー): {str(e)}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"無効なデータが入力されました: {str(e)}")
+
+    except ValueError as e:
+        db.rollback()
+        logging.error(f"ValueError (バリデーションエラー): {str(e)}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"入力データの形式が正しくありません: {str(e)}")
+
+    except TypeError as e:
+        db.rollback()
+        logging.error(f"TypeError (型エラー): {str(e)}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"データ型が正しくありません: {str(e)}")
+
     except Exception as e:
-        logging.error(f"Transaction insert error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Internal Server Error: {str(e)}"
-        )
+        db.rollback()
+        logging.error(f"Unexpected Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="予期しないエラーが発生しました。管理者に連絡してください。")
 
 
 
