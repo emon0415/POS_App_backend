@@ -15,6 +15,7 @@ from datetime import datetime
 from db_control import mymodels, schemas, crud, connect
 import json
 import pytz
+from typing import List
 
 
 # エラーハンドリング用ログの設定
@@ -112,9 +113,14 @@ async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db
                 "TOTAL_AMT": data.TOTAL_AMT,
             })
 
+            # 挿入された取引IDを取得。フロントエンドに返すため。
+            last_id_query = text("SELECT LAST_INSERT_ID()")
+            last_id = db.execute(last_id_query).fetchone()[0]
+
         # 成功レスポンスデータを作成
         return {
             "message": "Transaction added successfully",
+            "TRD_ID": last_id,
             "DATETIME":transaction_datetime,
             "EMP_CD":data.EMP_CD,
             "STORE_CD":data.STORE_CD,
@@ -163,19 +169,20 @@ class TransactionDetailData(BaseModel):
 @app.post("/add_transaction-detail", response_model=TransactionDetail)
 async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)):
     try:
-        # 商品コードから商品マスタテーブルにアクセスし、PRD_IDを取得
-        product_query = text("SELECT PRD_ID FROM m_product_horie WHERE code = :code")
-        product_result = db.execute(product_query, {"code": data.PRD_CODE}).fetchone()
-
-        if not product_result:
-            raise HTTPException(
-                status_code=404, detail=f"Product with code {data.PRD_CODE} not found."
-            )
-        
-        prd_id = product_result[0] # 商品IDを取得
-
         with db.begin():
-            try:
+            inserted_details = []
+            for data in details:
+                # 商品コードから商品マスタテーブルにアクセスし、PRD_IDを取得
+                product_query = text("SELECT PRD_ID FROM m_product_horie WHERE code = :code")
+                product_result = db.execute(product_query, {"code": data.PRD_CODE}).fetchone()
+
+                if not product_result:
+                    raise HTTPException(
+                        status_code=404, detail=f"Product with code {data.PRD_CODE} not found."
+                    )
+                
+                prd_id = product_result[0] # 商品IDを取得
+
                 # 取引明細にデータを挿入
                 detail_query = text("""
                     INSERT INTO transaction_detail_horie (TRD_ID, PRD_ID, PRD_CODE, PRD_NAME, PRD_PRICE)
@@ -191,25 +198,19 @@ async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)
 
                 # 挿入された明細キーを取得
                 last_id_query = text("SELECT LAST_INSERT_ID() AS last_id")
-                last_id = db.execute(last_id_query).fetchone()["last_id"]
+                last_id = db.execute(last_id_query).fetchone()[0]
+                
+                inserted_details.append(TransactionDetail(
+                    DTL_ID=last_id,
+                    TRD_ID=data.TRD_ID,
+                    PRD_ID=prd_id,
+                    PRD_CODE=data.PRD_CODE,
+                    PRD_NAME=data.PRD_NAME,
+                    PRD_PRICE=data.PRD_PRICE,
+                ))
+                
+        return inserted_details
             
-            except Exception as inner_e:
-                db.rollback()  # トランザクションをロールバック
-                logging.error(f"Error during transaction:  {str(inner_e)}", exc_info=True)  # 詳細なログ
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"An unexpected error occurred: {str(inner_e)}"
-                )  # 500 Internal Server Error を返す
-
-        # 成功レスポンスデータを作成
-        return TransactionDetail(
-            DTL_ID=last_id,
-            TRD_ID=data.TRD_ID,
-            PRD_ID=prd_id,
-            PRD_CODE=data.PRD_CODE,
-            PRD_NAME=data.PRD_NAME,
-            PRD_PRICE=data.PRD_PRICE,
-        )
     except HTTPException as e:
         logging.error(f"HTTPException: {e.detail}")# 明確にHTTPExceptionが発生した場合の処理
         raise e
