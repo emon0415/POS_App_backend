@@ -46,6 +46,14 @@ class TransactionDetailBase(BaseModel):
     PRD_NAME: str
     PRD_PRICE: int
 
+
+    # 取引明細データのリクエスト用スキーマ
+class TransactionDetailData(BaseModel):
+    TRD_ID: int
+    PRD_CODE: str
+    PRD_NAME: str
+    PRD_PRICE: int
+
 class TransactionDetailCreate(TransactionDetailBase):
     TRD_ID: int
 
