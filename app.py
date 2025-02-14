@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text, Column, String, Integer
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.exc import IntegrityError, OperationalError, DataError
 from dotenv import load_dotenv
@@ -15,7 +16,7 @@ from datetime import datetime
 from db_control import mymodels, schemas, crud, connect
 import json
 import pytz
-from typing import List
+from typing import List, Union
 
 
 # エラーハンドリング用ログの設定
@@ -166,58 +167,69 @@ class TransactionDetailData(BaseModel):
     PRD_NAME: str # 商品名
     PRD_PRICE: int # 商品単価
 
-@app.post("/add_transaction-detail", response_model=TransactionDetail)
-async def add_transaction_detail(data: TransactionDetailData, db=Depends(get_db)):
+@app.post("/add_transaction-detail", response_model=List[schemas.TransactionDetail])
+async def add_transaction_detail(
+    data: Union[schemas.TransactionDetailData, List[schemas.TransactionDetailData]],  # 複数の明細データを受け取る
+    db: Session = Depends(get_db)
+):
+    print("Received request data:", data)  # 受け取ったデータをログに出力
+    if not isinstance(data, list):  # 単数データの場合、リストに変換
+        data = [data]
+
     try:
-        with db.begin():
-            inserted_details = []
-            for data in details:
-                # 商品コードから商品マスタテーブルにアクセスし、PRD_IDを取得
-                product_query = text("SELECT PRD_ID FROM m_product_horie WHERE code = :code")
-                product_result = db.execute(product_query, {"code": data.PRD_CODE}).fetchone()
+        inserted_details = [] # 登録した取引明細を保存するリスト
 
-                if not product_result:
-                    raise HTTPException(
-                        status_code=404, detail=f"Product with code {data.PRD_CODE} not found."
-                    )
-                
-                prd_id = product_result[0] # 商品IDを取得
+        for item in data:
+            print(f"Processing item: TRD_ID={item.TRD_ID}, PRD_CODE={item.PRD_CODE}")  # デバッグ情報
 
-                # 取引明細にデータを挿入
-                detail_query = text("""
-                    INSERT INTO transaction_detail_horie (TRD_ID, PRD_ID, PRD_CODE, PRD_NAME, PRD_PRICE)
-                    VALUES (:TRD_ID, :PRD_ID, :PRD_CODE, :PRD_NAME, :PRD_PRICE)
-                """)
-                db.execute(detail_query, {
-                    "TRD_ID": data.TRD_ID,
-                    "PRD_ID": prd_id,
-                    "PRD_CODE": data.PRD_CODE,
-                    "PRD_NAME": data.PRD_NAME,
-                    "PRD_PRICE": data.PRD_PRICE,
-                })
+            # 取引が存在するか確認
+            transaction = db.query(mymodels.Transaction).filter_by(TRD_ID=item.TRD_ID).first()
+            if not transaction:
+                logging.error(f"Transaction ID {item.TRD_ID} not found in transaction_horie table.")
+                raise HTTPException(status_code=404, detail=f"Transaction ID {item.TRD_ID} not found.")
 
-                # 挿入された明細キーを取得
-                last_id_query = text("SELECT LAST_INSERT_ID() AS last_id")
-                last_id = db.execute(last_id_query).fetchone()[0]
-                
-                inserted_details.append(TransactionDetail(
-                    DTL_ID=last_id,
-                    TRD_ID=data.TRD_ID,
-                    PRD_ID=prd_id,
-                    PRD_CODE=data.PRD_CODE,
-                    PRD_NAME=data.PRD_NAME,
-                    PRD_PRICE=data.PRD_PRICE,
-                ))
-                
+            # m_product_horieにPRD_CODEがあるか確認
+            product = db.query(mymodels.Product).filter_by(CODE=item.PRD_CODE).first()
+            if not product:
+                logging.warning(f"Product with code {item.PRD_CODE} not found in m_product_horie table.")
+                raise HTTPException(status_code=404, detail=f"Product with code {item.PRD_CODE} not found.")
+
+            # 取引明細にデータを挿入（DTL_IDは auto_increment のため指定しない）
+            new_detail = mymodels.TransactionDetail(
+                TRD_ID=item.TRD_ID,
+                PRD_ID=product.PRD_ID,
+                PRD_CODE=product.CODE,
+                PRD_NAME=item.PRD_NAME,
+                PRD_PRICE=item.PRD_PRICE,
+            )
+            db.add(new_detail)
+
+            # 合計金額を更新（単純加算）
+            transaction.TOTAL_AMT += item.PRD_PRICE
+
+            inserted_details.append(new_detail)
+
+        # データベースにコミット
+        db.commit()
+
+        # 最新データを取得
+        for detail in inserted_details:
+            db.refresh(detail) # 挿入されたデータを最新の状態に更新
+
         return inserted_details
-            
-    except HTTPException as e:
-        logging.error(f"HTTPException: {e.detail}")# 明確にHTTPExceptionが発生した場合の処理
-        raise e
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Data integrity error occurred.")
+
+    except OperationalError:
+        db.rollback()
+        print(f"OperationalError: {str(e)}")  # デバッグ用にログ出力
+        raise HTTPException(status_code=500, detail="Database operation error occurred.")
+
     except Exception as e:
         db.rollback()
-        logging.error(f"Unexpected error occurred: {str(e)}", exc_info=True)  # 詳細なログ
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
 if __name__ == "__main__":
