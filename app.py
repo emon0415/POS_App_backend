@@ -93,10 +93,11 @@ async def get_product_by_code(code:str, db = Depends(get_db)):
 
 
 # 取引テーブルへの登録
-@app.post("/add_transaction", response_model=schemas.AddTransactionRequest)
+@app.post("/add_transaction", response_model=schemas.Transaction)
 async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db)):
 
     try:
+        logging.info(f"取引登録リクエスト受信: {data.dict()}")  # リクエストデータをログ出力
         # 現在の日時を取得（バックエンド側で処理）
         transaction_datetime = datetime.now(pytz.timezone("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -116,18 +117,29 @@ async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db
 
             # 挿入された取引IDを取得。フロントエンドに返すため。
             last_id_query = text("SELECT LAST_INSERT_ID()")
-            last_id = db.execute(last_id_query).fetchone()[0]
+            last_id_result = db.execute(last_id_query).fetchone()
 
-        # 成功レスポンスデータを作成
-        return {
-            "message": "Transaction added successfully",
-            "TRD_ID": last_id,
-            "DATETIME":transaction_datetime,
-            "EMP_CD":data.EMP_CD,
-            "STORE_CD":data.STORE_CD,
-            "POS_NO":data.POS_NO,
-            "TOTAL_AMT":data.TOTAL_AMT,
-        }
+            if not last_id_result:
+                logging.error("取引IDの取得に失敗しました")
+                raise HTTPException(status_code=500, detail="取引IDの取得に失敗しました")
+
+            last_id = last_id_result[0]
+
+        # データベースへの変更を確定
+        db.commit()
+
+        logging.info(f"取引登録成功: 取引ID {last_id}")
+
+        # FastAPI の自動変換を利用してレスポンスを返す
+        return schemas.Transaction(
+            TRD_ID=last_id,
+            DATETIME=transaction_datetime,
+            EMP_CD=data.EMP_CD,
+            STORE_CD=data.STORE_CD,
+            POS_NO=data.POS_NO,
+            TOTAL_AMT=data.TOTAL_AMT,
+        )
+    
     except IntegrityError as e:
         db.rollback()
         logging.error(f"IntegrityError (外部キー・ユニーク制約違反): {str(e)}", exc_info=True)
@@ -160,75 +172,60 @@ async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db
 
 
 
-# データ検証用モデル
-class TransactionDetailData(BaseModel):
-    TRD_ID: int # トランザクションID
-    PRD_CODE: str # 商品コード
-    PRD_NAME: str # 商品名
-    PRD_PRICE: int # 商品単価
-
-@app.post("/add_transaction-detail", response_model=List[schemas.TransactionDetail])
+@app.post("/add_transaction_detail", response_model=schemas.TransactionDetail)
 async def add_transaction_detail(
-    data: Union[schemas.TransactionDetailData, List[schemas.TransactionDetailData]],  # 複数の明細データを受け取る
+    data: schemas.TransactionDetailData,
     db: Session = Depends(get_db)
 ):
     print("Received request data:", data)  # 受け取ったデータをログに出力
-    if not isinstance(data, list):  # 単数データの場合、リストに変換
-        data = [data]
 
     try:
-        inserted_details = [] # 登録した取引明細を保存するリスト
+        print(f"Processing item: TRD_ID={data.TRD_ID}, PRD_CODE={data.PRD_CODE}")  # デバッグ情報
 
-        for item in data:
-            print(f"Processing item: TRD_ID={item.TRD_ID}, PRD_CODE={item.PRD_CODE}")  # デバッグ情報
+        # 取引が存在するか確認
+        transaction = db.query(mymodels.Transaction).filter_by(TRD_ID=data.TRD_ID).first()
+        if not transaction:
+            logging.error(f"Transaction ID {data.TRD_ID} not found in transaction_horie table.")
+            raise HTTPException(status_code=404, detail=f"Transaction ID {data.TRD_ID} not found.")
 
-            # 取引が存在するか確認
-            transaction = db.query(mymodels.Transaction).filter_by(TRD_ID=item.TRD_ID).first()
-            if not transaction:
-                logging.error(f"Transaction ID {item.TRD_ID} not found in transaction_horie table.")
-                raise HTTPException(status_code=404, detail=f"Transaction ID {item.TRD_ID} not found.")
+        # m_product_horieにPRD_CODEがあるか確認
+        product = db.query(mymodels.Product).filter_by(CODE=data.PRD_CODE).first()
+        if not product:
+            logging.warning(f"Product with code {data.PRD_CODE} not found in m_product_horie table.")
+            raise HTTPException(status_code=404, detail=f"Product with code {data.PRD_CODE} not found.")
 
-            # m_product_horieにPRD_CODEがあるか確認
-            product = db.query(mymodels.Product).filter_by(CODE=item.PRD_CODE).first()
-            if not product:
-                logging.warning(f"Product with code {item.PRD_CODE} not found in m_product_horie table.")
-                raise HTTPException(status_code=404, detail=f"Product with code {item.PRD_CODE} not found.")
-
-            # 取引明細にデータを挿入（DTL_IDは auto_increment のため指定しない）
-            new_detail = mymodels.TransactionDetail(
-                TRD_ID=item.TRD_ID,
-                PRD_ID=product.PRD_ID,
-                PRD_CODE=product.CODE,
-                PRD_NAME=item.PRD_NAME,
-                PRD_PRICE=item.PRD_PRICE,
-            )
-            db.add(new_detail)
-
-            # 合計金額を更新（単純加算）
-            transaction.TOTAL_AMT += item.PRD_PRICE
-
-            inserted_details.append(new_detail)
+        # 取引明細にデータを挿入（DTL_IDは auto_increment のため指定しない）
+        new_detail = mymodels.TransactionDetail(
+            TRD_ID=data.TRD_ID,
+            PRD_ID=product.PRD_ID,
+            PRD_CODE=product.CODE,
+            PRD_NAME=data.PRD_NAME,
+            PRD_PRICE=data.PRD_PRICE,
+        )
+        db.add(new_detail)
 
         # データベースにコミット
         db.commit()
 
         # 最新データを取得
-        for detail in inserted_details:
-            db.refresh(detail) # 挿入されたデータを最新の状態に更新
+        db.refresh(new_detail) # 挿入されたデータを最新の状態に更新するとデータベースで自動生成された値を取得できる
 
-        return inserted_details
+        logging.info(f"取引詳細登録成功: {new_detail}")
+        return new_detail
 
     except IntegrityError:
         db.rollback()
+        logging.error(f"IntegrityError: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail="Data integrity error occurred.")
 
     except OperationalError:
         db.rollback()
-        print(f"OperationalError: {str(e)}")  # デバッグ用にログ出力
+        logging.error(f"OperationalError: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database operation error occurred.")
 
     except Exception as e:
         db.rollback()
+        logging.error(f"Unexpected error: {str(e)}", exc_info=True) 
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
