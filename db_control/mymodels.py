@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, TIMESTAMP
+from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, TIMESTAMP, DECIMAL
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
 
@@ -43,3 +43,10 @@ class TransactionDetail(Base):
     product = relationship("Product", back_populates="transaction_details")
     transaction = relationship("Transaction", back_populates="transaction_details")
 
+# 税マスタ
+class Tax(Base):
+    __tablename__ = "tax_horie"
+    ID = Column(Integer, primary_key=True, nullable=False, comment="Primary Key")
+    CODE = Column(String(2), unique=True, nullable=False, comment="税率コード")
+    NAME = Column(String(20), nullable=False, comment="税率名称")
+    PERCENT = Column(DECIMAL(5,2), nullable=False, comment="税率(%)")
