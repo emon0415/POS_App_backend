@@ -34,9 +34,10 @@ class TransactionCreate(TransactionBase):
 # レスポンス用: DBから返すときはTRD_IDが含まれる
 class Transaction(TransactionBase):
     TRD_ID: int
+    TTL_AMT_EX_TAX: Optional[float]  # 税抜合計金額 (NULLを許容)
 
     class Config:
-        orm_mode = True
+        orm_mode = True # SQLAlchemy の ORM モデルからデータを取得する際に Pydantic スキーマに適用可能
 
 ## ============== 取引明細テーブル ==============
 class TransactionDetailBase(BaseModel):

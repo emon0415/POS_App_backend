@@ -98,35 +98,50 @@ async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db
 
     try:
         logging.info(f"取引登録リクエスト受信: {data.dict()}")  # リクエストデータをログ出力
+        print(f"Received data: EMP_CD={data.EMP_CD}, STORE_CD={data.STORE_CD}, POS_NO={data.POS_NO}, TOTAL_AMT={data.TOTAL_AMT}")
+
+        # 税率（TAX_ID=1）のPERCENTを取得
+        tax = db.query(mymodels.Tax).filter(mymodels.Tax.ID == 1).first()
+        if not tax:
+            logging.error("Tax rate with ID=1 not found")
+            raise HTTPException(status_code=404, detail="Tax rate not found")
+        
+        tax_percent = tax.PERCENT  # 例: 0.1（10%）
+        print(f"Tax rate found: {tax_percent}")  # 🔽【デバッグ用】税率の確認
+        ttl_amt_ex_tax = data.TOTAL_AMT - (data.TOTAL_AMT * tax_percent)  # 税抜き価格を計算
+        print(f"Calculated tax-excluded amount: {ttl_amt_ex_tax}")
+
         # 現在の日時を取得（バックエンド側で処理）
         transaction_datetime = datetime.now(pytz.timezone("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
 
-        with db.begin():
-            # 新規取引を挿入
-            transaction_query = text("""
-                INSERT INTO transaction_horie (DATETIME, EMP_CD, STORE_CD, POS_NO, TOTAL_AMT)
-                VALUES (:DATETIME, :EMP_CD, :STORE_CD, :POS_NO, :TOTAL_AMT)
-            """)
-            db.execute(transaction_query, {
-                "DATETIME": transaction_datetime,
-                "EMP_CD": data.EMP_CD,
-                "STORE_CD": data.STORE_CD,
-                "POS_NO": data.POS_NO,
-                "TOTAL_AMT": data.TOTAL_AMT,
-            })
+        # 新規取引を挿入
+        transaction_query = text("""
+            INSERT INTO transaction_horie (DATETIME, EMP_CD, STORE_CD, POS_NO, TOTAL_AMT, TTL_AMT_EX_TAX)
+            VALUES (:DATETIME, :EMP_CD, :STORE_CD, :POS_NO, :TOTAL_AMT, :TTL_AMT_EX_TAX)
+        """)
+        db.execute(transaction_query, {
+            "DATETIME": transaction_datetime,
+            "EMP_CD": data.EMP_CD,
+            "STORE_CD": data.STORE_CD,
+            "POS_NO": data.POS_NO,
+            "TOTAL_AMT": data.TOTAL_AMT,
+            "TTL_AMT_EX_TAX": ttl_amt_ex_tax,
+        })
 
-            # 挿入された取引IDを取得。フロントエンドに返すため。
-            last_id_query = text("SELECT LAST_INSERT_ID()")
-            last_id_result = db.execute(last_id_query).fetchone()
+        # 挿入された取引IDを取得。フロントエンドに返すため。
+        last_id_query = text("SELECT LAST_INSERT_ID()")
+        last_id_result = db.execute(last_id_query).fetchone()
 
-            if not last_id_result:
-                logging.error("取引IDの取得に失敗しました")
-                raise HTTPException(status_code=500, detail="取引IDの取得に失敗しました")
+        if not last_id_result:
+            logging.error("取引IDの取得に失敗しました")
+            raise HTTPException(status_code=500, detail="取引IDの取得に失敗しました")
 
-            last_id = last_id_result[0]
+        last_id = last_id_result[0]
+        print(f"Transaction ID: {last_id}")
 
         # データベースへの変更を確定
         db.commit()
+        print("Transaction successfully committed")
 
         logging.info(f"取引登録成功: 取引ID {last_id}")
 
@@ -138,6 +153,7 @@ async def add_transaction(data: schemas.AddTransactionRequest, db=Depends(get_db
             STORE_CD=data.STORE_CD,
             POS_NO=data.POS_NO,
             TOTAL_AMT=data.TOTAL_AMT,
+            TTL_AMT_EX_TAX=ttl_amt_ex_tax,
         )
     
     except IntegrityError as e:
