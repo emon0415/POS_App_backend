@@ -207,8 +207,8 @@ async def add_transaction_detail(
         # データベースにコミット
         db.commit()
 
-        # 最新データを取得
-        db.refresh(new_detail) # 挿入されたデータを最新の状態に更新するとデータベースで自動生成された値を取得できる
+        # 挿入されたデータを最新の状態に更新するとデータベースで自動生成された値を取得できる
+        db.refresh(new_detail) 
 
         logging.info(f"取引詳細登録成功: {new_detail}")
         return new_detail
