@@ -25,6 +25,7 @@ class Transaction(Base):
     STORE_CD = Column(String(5), nullable=False, comment="store code")
     POS_NO = Column(String(3), nullable=False, comment="POS機ID")
     TOTAL_AMT = Column(Integer, comment="total price")
+    TTL_AMT_EX_TAX = Column(Integer, nullable=False, comment="合計金額（税抜き）")
 
     # リレーションを定義する
     transaction_details = relationship("TransactionDetail", back_populates="transaction")
@@ -38,6 +39,7 @@ class TransactionDetail(Base):
     PRD_CODE = Column(String(13), nullable=False, comment="商品コード")
     PRD_NAME = Column(String(50), nullable=False, comment="商品名")
     PRD_PRICE = Column(Integer, nullable=False, comment="商品単価")
+    TAX_CD = Column(String(2),nullable=False, comment="消費税区分")
 
     # リレーションを定義する
     product = relationship("Product", back_populates="transaction_details")

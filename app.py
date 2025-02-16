@@ -209,6 +209,15 @@ async def add_transaction_detail(
         if not product:
             logging.warning(f"Product with code {data.PRD_CODE} not found in m_product_horie table.")
             raise HTTPException(status_code=404, detail=f"Product with code {data.PRD_CODE} not found.")
+        
+        # `tax_horie` から `ID=1` の `CODE` を取得
+        tax = db.query(mymodels.Tax).filter(mymodels.Tax.ID == 1).first()
+        if not tax:
+            logging.error("Tax rate with ID=1 not found")
+            raise HTTPException(status_code=404, detail="Tax rate not found")
+
+        tax_code = tax.CODE  # 例: '10'（10%）
+        print(f"Tax code retrieved: {tax_code}")
 
         # 取引明細にデータを挿入（DTL_IDは auto_increment のため指定しない）
         new_detail = mymodels.TransactionDetail(
@@ -217,6 +226,7 @@ async def add_transaction_detail(
             PRD_CODE=product.CODE,
             PRD_NAME=data.PRD_NAME,
             PRD_PRICE=data.PRD_PRICE,
+            TAX_CD=tax_code
         )
         db.add(new_detail)
 
